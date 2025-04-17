@@ -1,0 +1,43 @@
+name: GitHub to ClickUp Automation
+
+on:
+  pull_request:
+    types: [opened, closed, reopened, edited]
+  issues:
+    types: [opened, edited, closed]
+
+jobs:
+  sync-with-clickup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Extract ClickUp Task ID
+        id: extract
+        run: |
+          echo "Extracting task ID from PR/issue..."
+          echo "GITHUB_EVENT_NAME=${{ github.event_name }}"
+          
+          BODY=$(jq -r '.pull_request.body // .issue.body' "$GITHUB_EVENT_PATH")
+          TITLE=$(jq -r '.pull_request.title // .issue.title' "$GITHUB_EVENT_PATH")
+
+          TASK_ID=$(echo "$TITLE $BODY" | grep -oE '#[a-z0-9]{9}' | head -n1 | tr -d '#')
+
+          echo "Task ID: $TASK_ID"
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+
+      - name: Send to ClickUp
+        if: steps.extract.outputs.task_id != ''
+        run: |
+          echo "Sending update to ClickUp..."
+          curl -X POST https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }}/comment \
+            -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "comment_text": "🔄 GitHub `${{ github.event_name }}` event occurred on this task: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number }}"
+            }'
+
+
+i have been added the token now do i have to modify the file
