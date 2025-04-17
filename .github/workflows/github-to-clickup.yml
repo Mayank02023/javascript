@@ -44,3 +44,14 @@ jobs:
             -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"comment_text\": \"$COMMENT_TEXT\"}"
+
+      - name: Update ClickUp Task Status if PR Merged
+        if: github.event.pull_request.merged == true && steps.extract.outputs.task_id != ''
+        run: |
+          echo "PR was merged — updating ClickUp task status..."
+          curl -X PUT https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }} \
+            -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+                  "status": "COMPLETE"
+                }'
