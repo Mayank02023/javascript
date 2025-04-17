@@ -25,16 +25,22 @@ jobs:
 
           TASK_ID=$(echo "$TITLE $BODY" | grep -oE '#[a-z0-9]{9}' | head -n1 | tr -d '#')
 
-          echo "Task ID: $TASK_ID"
-          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
 
       - name: Send to ClickUp
         if: steps.extract.outputs.task_id != ''
         run: |
           echo "Sending update to ClickUp..."
-          curl -X POST https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }}/comment \
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            NUMBER=${{ github.event.pull_request.number }}
+          else
+            NUMBER=${{ github.event.issue.number }}
+          fi
+
+          COMMENT_TEXT="🔄 GitHub \`${{ github.event_name }}\` event occurred on this task: https://github.com/${{ github.repository }}/$([[ \"${{ github.event_name }}\" == \"pull_request\" ]] && echo "pull" || echo "issues")/${NUMBER}"
+
+          curl -X POST "https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }}/comment" \
             -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "comment_text": "🔄 GitHub `${{ github.event_name }}` event occurred on this task: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number }}"
-}'
+            -d "{\"comment_text\": \"$COMMENT_TEXT\"}"
