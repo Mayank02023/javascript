@@ -2,9 +2,13 @@ name: GitHub to ClickUp Automation
 
 on:
   pull_request:
-    types: [opened, closed, reopened, edited]
+    types: [opened, closed, reopened]
   issues:
-    types: [opened, edited, closed]
+    types: [closed, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
 
 jobs:
   sync-with-clickup:
@@ -17,41 +21,101 @@ jobs:
       - name: Extract ClickUp Task ID
         id: extract
         run: |
-          echo "Extracting task ID from PR/issue..."
-          echo "GITHUB_EVENT_NAME=${{ github.event_name }}"
-          
-          BODY=$(jq -r '.pull_request.body // .issue.body' "$GITHUB_EVENT_PATH")
-          TITLE=$(jq -r '.pull_request.title // .issue.title' "$GITHUB_EVENT_PATH")
+          echo "Extracting ClickUp task ID..."
 
-          TASK_ID=$(echo "$TITLE $BODY" | grep -oE '#[a-z0-9]{9}' | head -n1 | tr -d '#')
+          case "${{ github.event_name }}" in
+            pull_request)
+              TEXT="${{ github.event.pull_request.title }} ${{ github.event.pull_request.body }}"
+              ;;
+            issues)
+              TEXT="${{ github.event.issue.title }} ${{ github.event.issue.body }}"
+              ;;
+            issue_comment)
+              TEXT="${{ github.event.issue.title }} ${{ github.event.issue.body }} ${{ github.event.comment.body }}"
+              ;;
+            pull_request_review)
+              TEXT="${{ github.event.pull_request.title }} ${{ github.event.pull_request.body }} ${{ github.event.review.body }}"
+              ;;
+          esac
 
-          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          TASK_ID=$(echo "$TEXT" | grep -oE '#[a-z0-9]{9}' | head -n1 | tr -d '#')
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
 
-      - name: Send to ClickUp
+      - name: Send Update to ClickUp
         if: steps.extract.outputs.task_id != ''
         run: |
-          echo "Sending update to ClickUp..."
+          echo "Preparing ClickUp comment..."
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            NUMBER=${{ github.event.pull_request.number }}
-          else
-            NUMBER=${{ github.event.issue.number }}
-          fi
+          case "${{ github.event_name }}" in
+            pull_request)
+              if [ "${{ github.event.action }}" = "opened" ]; then
+                EVENT="PR opened"
+              elif [ "${{ github.event.action }}" = "closed" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                EVENT="PR merged"
+              elif [ "${{ github.event.action }}" = "reopened" ]; then
+                EVENT="PR reopened"
+              else
+                exit 0
+              fi
+              URL="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+              ;;
+            issues)
+              if [ "${{ github.event.action }}" = "closed" ]; then
+                EVENT="Issue closed"
+              elif [ "${{ github.event.action }}" = "reopened" ]; then
+                EVENT="Issue reopened"
+              else
+                exit 0
+              fi
+              URL="https://github.com/${{ github.repository }}/issues/${{ github.event.issue.number }}"
+              ;;
+            issue_comment)
+              EVENT="Issue comment: ${{ github.event.comment.body }}"
+              URL="https://github.com/${{ github.repository }}/issues/${{ github.event.issue.number }}#issuecomment-${{ github.event.comment.id }}"
+              ;;
+            pull_request_review)
+              EVENT="PR reviewed: ${{ github.event.review.state }}"
+              URL="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}#pullrequestreview-${{ github.event.review.id }}"
+              ;;
+          esac
 
-          COMMENT_TEXT="🔄 GitHub \`${{ github.event_name }}\` event occurred on this task: https://github.com/${{ github.repository }}/$([[ \"${{ github.event_name }}\" == \"pull_request\" ]] && echo "pull" || echo "issues")/${NUMBER}"
+          COMMENT_TEXT="🔔 *${EVENT}* on [GitHub](${URL})"
 
           curl -X POST "https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }}/comment" \
             -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"comment_text\": \"$COMMENT_TEXT\"}"
 
-      - name: Update ClickUp Task Status if PR Merged
-        if: github.event.pull_request.merged == true && steps.extract.outputs.task_id != ''
+      - name: Update ClickUp Task Status Based on Event
+        if: steps.extract.outputs.task_id != ''
         run: |
-          echo "PR was merged — updating ClickUp task status..."
-          curl -X PUT https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }} \
-            -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-                  "status": "COMPLETE"
-                }'
+          echo "Determining if status update is needed..."
+
+          STATUS=""
+
+          case "${{ github.event_name }}" in
+            pull_request)
+              if [ "${{ github.event.action }}" = "opened" ]; then
+                STATUS="IN REVIEW"
+              elif [ "${{ github.event.action }}" = "closed" ] && [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                STATUS="COMPLETE"
+              fi
+              ;;
+            issues)
+              if [ "${{ github.event.action }}" = "closed" ]; then
+                STATUS="READY FOR RELEASE"
+              elif [ "${{ github.event.action }}" = "reopened" ]; then
+                STATUS="IN PROGRESS"
+              fi
+              ;;
+          esac
+
+          if [ "$STATUS" != "" ]; then
+            echo "Updating ClickUp task status to '$STATUS'..."
+            curl -X PUT "https://api.clickup.com/api/v2/task/${{ steps.extract.outputs.task_id }}" \
+              -H "Authorization: ${{ secrets.CLICKUP_API_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"status\": \"$STATUS\"}"
+          else
+            echo "No status change needed."
+          fi
