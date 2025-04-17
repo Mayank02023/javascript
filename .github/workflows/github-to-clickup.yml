@@ -38,6 +38,3 @@ jobs:
             -d '{
               "comment_text": "🔄 GitHub `${{ github.event_name }}` event occurred on this task: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number }}"
             }'
-
-
-i have been added the token now do i have to modify the file
