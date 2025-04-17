@@ -76,7 +76,4 @@ async function run(){
 console.log(`1`);
 run();
 console.log(`2`);
-
-
-
-
+console.log(`2`);
